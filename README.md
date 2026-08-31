@@ -28,9 +28,7 @@ this project folder.
    ├── src/
    └── pi-sandbox/       <- this project, copied in here
    ```
-2. Install Podman (`sudo dnf install podman` or `sudo apt install podman`;
-   on macOS, `brew install podman`; on Windows, install it inside WSL2 the
-   same way — see [Platform support](#platform-support) above).
+2. Install Podman -> [link to podman manual](https://github.com/earendil-works/pi)
 3. Run:
    ```bash
    ./run.sh
