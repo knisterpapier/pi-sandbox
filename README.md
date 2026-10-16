@@ -62,6 +62,7 @@ folder.
 | `./run.sh --no-build` | skip the build step |
 | `./run.sh --edit-defaults` | edit the **system-wide** config in `$EDITOR` (falls back to `nano`) |
 | `./run.sh --edit-config` | edit **this project's** overrides in `$EDITOR` |
+| `./run.sh --hindsight start\|stop\|status` | manage the optional memory server without starting pi |
 | `./run.sh --help` | flags plus the resolved paths of both config files |
 | `./run.sh --no-build -p "summarize the project"` | anything not recognised above goes straight to pi, e.g. print mode |
 
@@ -204,6 +205,47 @@ directly. To remove the ceiling, put `exaApiKey` in `data/agent/web-search.json`
 `auto` mode already prefers when configured. Both keys and the SearXNG URL live
 inside the mount, so the agent can read them.
 
+## Project memory (Hindsight, optional)
+
+Set `PI_HINDSIGHT=1` in the config file (or answer `y` to the first-run
+prompt) and `run.sh` also runs [Hindsight](https://github.com/vectorize-io/hindsight)
+— a local memory server — as one detached Podman container per project. On
+the next start, `entrypoint.sh` installs the official
+`@vectorize-io/hindsight-coding-agents` extension into pi; from then on
+relevant memories are recalled into every turn and every turn is retained in
+the background. The repo's git history is ingested too, so decisions that
+only live in old commit messages become searchable. What pi knows about the
+project survives sessions and context compaction.
+
+- **Data.** The embedded PostgreSQL lives in `pi-sandbox/data/hindsight/`
+  (gitignored) — the memory travels with the project folder, and deleting it
+  means the project starts knowing nothing. On macOS, Postgres on a virtiofs
+  bind mount can misbehave; `PI_HINDSIGHT_VOLUME=1` switches to a named
+  volume instead (everything else unchanged).
+- **Models.** Fact extraction reuses `PI_PROVIDER_BASE_URL` /
+  `PI_PROVIDER_API_KEY` with `PI_HINDSIGHT_LLM_MODEL` (default:
+  `PI_MODEL_ID`) — point it at a cheap model if your server serves several.
+  Embeddings and reranking run locally inside the Hindsight container, no API
+  key needed.
+- **Ports.** API `http://localhost:8888`, memory browser UI
+  `http://localhost:9999`, both bound to `127.0.0.1` only. Two projects with
+  memory running at once need distinct `PI_HINDSIGHT_PORT` /
+  `PI_HINDSIGHT_UI_PORT` values.
+- **Control.** The memory server stops when pi exits — the sandbox leaves
+  nothing behind. Set `PI_HINDSIGHT_KEEP=1` to instead keep it up between
+  sessions (faster restarts), and stop it manually with
+  `./run.sh --hindsight stop`; `start`/`status` manage it without needing pi.
+  `PI_HINDSIGHT=0` turns the feature off. If the server can't be reached, pi
+  starts anyway without memory — a warning, never a failure.
+- **The extension** is wired natively, not as a pi package (the upstream
+  package deliberately supports only its installer for pi): the installer
+  runs once into `data/home/.hindsight`, and `~/.pi/agent` is symlinked into
+  `data/agent` so its settings wiring lands in the very `settings.json` pi
+  reads. pi's own daily auto-update keeps the runtime fresh afterwards.
+- **Nothing is redacted.** Everything pi says lands in the memory DB — treat
+  `data/hindsight/` like a transcript of the whole collaboration (it is
+  one). It sits inside the mount, so the agent can read it.
+
 ## Updates
 
 Nothing is pinned-and-forgotten, and nothing changes behind your back at some
@@ -324,17 +366,26 @@ anything inside as "as powerful as this container":
   older setup), sources it plus this project's override file, rewrites
   `localhost`/`127.0.0.1` in your server URL to `host.containers.internal` so a
   server on your own machine works, appends `/v1` to a bare `host:port` (where
-  OpenAI-compatible servers live), builds, and launches the sandboxed
-  container. `--no-build`, `--edit-defaults`, `--edit-config`, `--help` are
-  its own; anything else goes to pi.
+  OpenAI-compatible servers live), starts the optional Hindsight memory
+  server when `PI_HINDSIGHT=1`, builds, and launches the sandboxed
+  container. `--no-build`, `--edit-defaults`, `--edit-config`,
+  `--hindsight start|stop|status`, `--help` are its own; anything else goes
+  to pi.
 - `entrypoint.sh` — runs inside the container before pi starts. Points pi's
   config dir and `$HOME` at `pi-sandbox/data/`, then regenerates pi's
   [`models.json`](https://pi.dev/docs/latest/models) / `settings.json` /
   [`mcp.json`](https://pi.dev/docs/latest/mcp) from the forwarded variables,
   merging with what's already there so your own edits and `pi mcp add`
   servers are kept. Registers your server as a provider named `sandbox` and
-  sets it — and your configured model — as pi's default. Then it prints what's
+  sets it — and your configured model — as pi's default. Installs the
+  Hindsight memory extension once when memory is enabled. Then it prints what's
   visible under `/workspace` and hands off to pi.
+- `extensions/welcome.ts` — small glue loaded via `settings.json` (wired by
+  `entrypoint.sh`): the feynman package replaces pi's built-in welcome header
+  with its own research card after an async build, so this extension restores
+  pi's stock header once feynman's chain settles, and adds a `/sandbox`
+  command showing model, mount, memory, and MCP facts. Edit freely; plain
+  TypeScript loaded by pi's `jiti`.
 
 ## Updating pi
 
