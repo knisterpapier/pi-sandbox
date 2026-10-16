@@ -19,8 +19,6 @@ IMAGE_NAME="pi-sandbox"
 # So the server URL and key are filled in once and every project on this machine
 # uses them; a project only repeats what differs. PI_SANDBOX_ENV replaces the
 # project layer with a file of your own (CI, or two projects sharing a name).
-# PI_HINDSIGHT=1 (in either file) additionally runs a local Hindsight memory
-# server for pi; its data lives under pi-sandbox/data/hindsight.
 # ---------------------------------------------------------------------------
 CONFIG_ROOT="${PI_SANDBOX_CONFIG_ROOT:-$HOME/.config/pi-sandbox}"
 DEFAULTS_FILE="$CONFIG_ROOT/defaults.env"
@@ -51,8 +49,6 @@ Usage: ./run.sh [pi-sandbox flags] [pi flags...]
   --no-build         skip the image build
   --edit-defaults    edit the system-wide config:   $DEFAULTS_FILE
   --edit-config      edit this project's overrides: $ENV_FILE
-  --hindsight [start|stop|status]
-                     manage the optional memory server without starting pi
   --help             this text
 
 Config: $DEFAULTS_FILE applies to every pi-sandbox on this machine;
@@ -66,8 +62,6 @@ USAGE
 # ---------------------------------------------------------------------------
 NO_BUILD=false
 EDIT_FILE=""
-HINDSIGHT_REQUESTED=false
-HINDSIGHT_ACTION=""
 PI_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -75,12 +69,9 @@ while [ $# -gt 0 ]; do
     --edit-defaults) EDIT_FILE="$DEFAULTS_FILE" ;;
     --edit-config) EDIT_FILE="$ENV_FILE" ;;
     --hindsight)
-      HINDSIGHT_REQUESTED=true
-      case "${2:-status}" in
-        start|stop|status) HINDSIGHT_ACTION="${2:-status}"; shift ;;
-        *) HINDSIGHT_ACTION=status ;;
-      esac
-      ;;
+      echo "--hindsight was removed from pi-sandbox: the memory server and its" >&2
+      echo "data are gone, so there is nothing left to start, stop, or check." >&2
+      exit 2 ;;
     -h|--help) usage; exit 0 ;;
     *) PI_ARGS+=("$1") ;;
   esac
@@ -160,35 +151,6 @@ if ! podman info >/dev/null 2>&1; then
     fi
     exit 1
   fi
-fi
-
-# ---------------------------------------------------------------------------
-# Hindsight memory server (opt-in: PI_HINDSIGHT=1 in the config file). stop
-# and status touch only the container, so they run before config handling;
-# start needs the model-server settings and runs with them below.
-# ---------------------------------------------------------------------------
-HS_NAME="pi-sandbox-hindsight-$(printf '%s' "$PROJECT_NAME" | sed 's/[^A-Za-z0-9._-]/-/g')"
-
-if [ "$HINDSIGHT_REQUESTED" = true ] && [ "$HINDSIGHT_ACTION" != start ]; then
-  case "$HINDSIGHT_ACTION" in
-    stop)
-      if podman ps --filter "name=^${HS_NAME}$" --format '{{.Names}}' | grep -q .; then
-        podman stop "$HS_NAME" >/dev/null && echo "Hindsight memory server stopped."
-      else
-        echo "Hindsight memory server is not running."
-      fi
-      ;;
-    *)
-      if podman ps --filter "name=^${HS_NAME}$" --format '{{.Names}}' | grep -q .; then
-        echo "Hindsight memory server: running (API http://localhost:${PI_HINDSIGHT_PORT:-8888}, UI http://localhost:${PI_HINDSIGHT_UI_PORT:-9999})"
-      elif podman ps -a --filter "name=^${HS_NAME}$" --format '{{.Names}}' | grep -q .; then
-        echo "Hindsight memory server: container exists but is stopped (./run.sh --hindsight start)"
-      else
-        echo "Hindsight memory server: not set up (set PI_HINDSIGHT=1 in the config, or ./run.sh --hindsight start)"
-      fi
-      ;;
-  esac
-  exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -282,13 +244,6 @@ if [ ! -f "$DEFAULTS_FILE" ] && [ ! -f "$ENV_FILE" ]; then
     done
   fi
 
-  echo ""
-  read -rp "Enable Hindsight project memory (a local memory server pi learns from)? [y/N]: " ENABLE_HS
-  echo ""
-  if [[ "$ENABLE_HS" =~ ^[Yy] ]]; then
-    env_put PI_HINDSIGHT '1' >> "$DEFAULTS_FILE"
-  fi
-
   echo "Wrote $DEFAULTS_FILE (system-wide)"
   echo "(--edit-defaults changes it later; delete it to go through the prompts again)"
   echo ""
@@ -344,78 +299,6 @@ timeout_cmd() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# Hindsight memory server. One detached container per project; its embedded
-# PostgreSQL keeps its data inside the project under data/hindsight unless
-# PI_HINDSIGHT_VOLUME=1 moves it to a named volume (use that if Postgres
-# misbehaves on a macOS virtiofs bind mount). Fact extraction reuses the same
-# OpenAI-compatible server pi talks to (override the model with
-# PI_HINDSIGHT_LLM_MODEL); embeddings and reranking run inside the container.
-# Any failure here is a warning, not a stop: pi starts without memory.
-# ---------------------------------------------------------------------------
-start_hindsight() {
-  local port="${PI_HINDSIGHT_PORT:-8888}" ui_port="${PI_HINDSIGHT_UI_PORT:-9999}"
-  if podman ps --filter "name=^${HS_NAME}$" --format '{{.Names}}' | grep -q .; then
-    echo "Hindsight memory server: already running (http://localhost:${port})"
-  else
-    if podman ps -a --filter "name=^${HS_NAME}$" --format '{{.Names}}' | grep -q .; then
-      podman start "$HS_NAME" >/dev/null
-    else
-      podman image exists ghcr.io/vectorize-io/hindsight:latest \
-        || timeout_cmd 300 podman pull ghcr.io/vectorize-io/hindsight:latest >/dev/null \
-        || { echo "Warning: couldn't get the Hindsight image; starting without memory." >&2; return 0; }
-      local -a hs_mount
-      if [ "${PI_HINDSIGHT_VOLUME:-0}" = 1 ]; then
-        hs_mount=(-v "${HS_NAME}-data:/home/hindsight/.pg0")
-      else
-        mkdir -p "$SCRIPT_DIR/data/hindsight"
-        hs_mount=(-v "$SCRIPT_DIR/data/hindsight:/home/hindsight/.pg0:Z")
-      fi
-      echo "Starting Hindsight memory server (first start initializes the database, ~1 min)..."
-      podman run -d --rm --name "$HS_NAME" \
-        -p "127.0.0.1:${port}:8888" -p "127.0.0.1:${ui_port}:9999" \
-        -e HINDSIGHT_API_LLM_PROVIDER="${PI_HINDSIGHT_LLM_PROVIDER:-openai}" \
-        -e HINDSIGHT_API_LLM_BASE_URL="$PI_PROVIDER_BASE_URL" \
-        -e HINDSIGHT_API_LLM_API_KEY="$PI_PROVIDER_API_KEY" \
-        -e HINDSIGHT_API_LLM_MODEL="${PI_HINDSIGHT_LLM_MODEL:-${PI_MODEL_ID:-default}}" \
-        "${hs_mount[@]}" \
-        ghcr.io/vectorize-io/hindsight:latest >/dev/null \
-        || { echo "Warning: the Hindsight container failed to start; starting without memory." >&2; return 0; }
-    fi
-    # Wait for the API to answer; a slow first start is a warning, not a failure.
-    local ok=yes i
-    if command -v curl >/dev/null 2>&1; then
-      ok=no
-      for i in $(seq 1 60); do
-        if curl --max-time 2 -s -o /dev/null "http://127.0.0.1:${port}" 2>/dev/null; then ok=yes; break; fi
-        sleep 2
-      done
-    fi
-    if [ "$ok" = yes ]; then
-      echo "Hindsight memory server: http://localhost:${port} (UI http://localhost:${ui_port})"
-    else
-      echo "Warning: Hindsight isn't answering on ${port} yet; pi will start without memory this run." >&2
-      return 0
-    fi
-  fi
-  # What the pi container's Hindsight extension talks to. host.containers.internal
-  # reaches the -p 127.0.0.1 mapping above, same trick as the model server URL.
-  export HINDSIGHT_API_URL="http://host.containers.internal:${port}"
-}
-
-if [ "${PI_HINDSIGHT:-0}" = 1 ] || [ "$HINDSIGHT_REQUESTED" = true ]; then
-  start_hindsight
-  if [ "$HINDSIGHT_REQUESTED" = true ] && [ "$HINDSIGHT_ACTION" = start ]; then
-    echo "Hindsight memory server is set up; pi not started (--hindsight start)."
-    exit 0
-  fi
-  # The sandbox leaves nothing behind: stop the memory server when pi exits.
-  # PI_HINDSIGHT_KEEP=1 opts out (faster restarts, server between sessions).
-  if [ "${PI_HINDSIGHT_KEEP:-0}" != 1 ]; then
-    trap 'podman stop "$HS_NAME" >/dev/null 2>&1 || true' EXIT
-  fi
-fi
-
 # Resource caps. Override in the config file if a build needs more.
 MEMORY_LIMIT="${PI_SANDBOX_MEMORY:-4g}"
 PIDS_LIMIT="${PI_SANDBOX_PIDS:-4096}"
@@ -456,8 +339,7 @@ done
 # Containerfile to keep pi off the network at startup — setting any of them
 # here overrides that.
 OPTIONAL_VARS=(PI_OFFLINE PI_SKIP_VERSION_CHECK PI_TELEMETRY PI_UPDATE_CHECK
-               PI_MODEL_INPUT PI_MODEL_REASONING PI_EXTRA_MODELS PI_PACKAGES
-               HINDSIGHT_API_URL)
+               PI_MODEL_INPUT PI_MODEL_REASONING PI_EXTRA_MODELS PI_PACKAGES)
 EXTRA_FLAGS=()
 for v in "${OPTIONAL_VARS[@]}"; do
   if declare -p "$v" >/dev/null 2>&1; then EXTRA_FLAGS+=(-e "$v"); fi

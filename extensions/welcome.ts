@@ -5,7 +5,7 @@
  * hints) with its own research card, built asynchronously at session start —
  * whoever calls setHeader last wins. This extension restores pi's built-in
  * header after feynman's async build settles, and adds `/sandbox` for the
- * sandbox facts (model, mount, memory, MCP) the entrypoint used to echo
+ * sandbox facts (model, mount, MCP) the entrypoint used to echo
  * before pi's screen paint erased it.
  *
  * Loaded via the `extensions` array in settings.json, which entrypoint.sh
@@ -25,7 +25,6 @@ function sandboxFacts() {
     ctx: e.PI_CONTEXT_WINDOW || "128000",
     maxOut: e.PI_MAX_TOKENS || "4096",
     mcp,
-    memory: e.HINDSIGHT_API_URL ? "on" : "off",
   };
 }
 
@@ -51,14 +50,14 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("sandbox", {
-    description: "Show what this sandbox exposes (model, mount, memory, MCP)",
+    description: "Show what this sandbox exposes (model, mount, MCP)",
     handler: async (_args, ctx) => {
       const f = sandboxFacts();
       const entries = topEntries(ctx.cwd);
       ctx.ui.notify(
         [
           `model ${f.model} (${f.ctx} ctx, ${f.maxOut} max out) via provider "sandbox"`,
-          `${f.mcp} MCP servers · memory ${f.memory} · pi packages per PI_PACKAGES`,
+          `${f.mcp} MCP servers · pi packages per PI_PACKAGES`,
           `only mount: ${f.host} → /workspace` +
             (entries !== null ? ` (${entries} top-level entries)` : ""),
           `everything pi can change lives under ${f.subdir}/data/ (gitignored) or /workspace`,

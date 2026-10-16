@@ -384,44 +384,6 @@ fi
 echo "in-image tools: pi $(/usr/local/bin/pi --version 2>/dev/null), $(rg --version 2>/dev/null | awk 'NR==1{print "ripgrep "$2}'), $(fdfind --version 2>/dev/null | awk 'NR==1{print "fd "$2}'), node $(node --version)"
 
 # ---------------------------------------------------------------------------
-# Hindsight memory (optional). run.sh sets HINDSIGHT_API_URL when
-# PI_HINDSIGHT=1 and its server answered. The official
-# @vectorize-io/hindsight-coding-agents package is deliberately not a pi
-# package — its installer copies a runtime into $HOME/.hindsight and wires the
-# extension entry into ~/.pi/agent/settings.json. HOME lives under the
-# persistent data/ mount, so that install survives rebuilds; ~/.pi/agent is
-# symlinked to the pi config dir so the installer writes the very settings.json
-# pi reads (the python step above already regenerated it, and merges later, so
-# the wiring is never clobbered). pi's own daily autoUpdate refreshes the
-# runtime from here on.
-# ---------------------------------------------------------------------------
-if [ -n "${HINDSIGHT_API_URL:-}" ]; then
-  if [ "$PERSISTENT" != yes ]; then
-    echo "Warning: Hindsight memory needs the persistent data dir, which is unavailable; starting without memory." >&2
-  elif [ -d "$HOME/.pi/agent" ] && [ ! -L "$HOME/.pi/agent" ]; then
-    echo "Warning: $HOME/.pi/agent is a real folder, not the expected symlink; Hindsight wiring skipped." >&2
-  else
-    mkdir -p "$HOME/.pi"
-    ln -sfn "$PI_CODING_AGENT_DIR" "$HOME/.pi/agent"
-    if [ ! -d "$HOME/.hindsight/coding-agents" ]; then
-      echo "Installing Hindsight memory extension (one-time)..."
-      hs_run() {
-        if command -v timeout >/dev/null 2>&1; then timeout 300 "$@"
-        elif command -v gtimeout >/dev/null 2>&1; then gtimeout 300 "$@"
-        else "$@"
-        fi
-      }
-      if ! hs_run npx -y @vectorize-io/hindsight-coding-agents install pi \
-           --server self-hosted --api-url "$HINDSIGHT_API_URL" \
-           >/dev/null 2>/tmp/hindsight-install.err; then
-        echo "Warning: Hindsight extension install failed; pi starts without memory:" >&2
-        tail -n 3 /tmp/hindsight-install.err >&2
-      fi
-    fi
-  fi
-fi
-
-# ---------------------------------------------------------------------------
 # Proof of what is exposed, then hand off to pi.
 # ---------------------------------------------------------------------------
 echo "================================================================"
