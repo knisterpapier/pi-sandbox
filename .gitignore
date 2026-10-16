@@ -1,0 +1,10 @@
+# pi generates everything below pi-sandbox/ (its config dir, sessions, npm and
+# uv caches). Nothing here is meant to be committed.
+data/
+
+# Legacy location of the config file. It now lives in
+# ~/.config/pi-sandbox/<project-name>/.env, but ignoring this keeps a stray
+# local copy (or an un-migrated one) out of git either way.
+.env
+
+.DS_Store
